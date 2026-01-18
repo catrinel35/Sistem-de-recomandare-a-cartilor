@@ -1,0 +1,103 @@
+Top 50 Subjects:
+Fiction: 9986
+Romance: 2920
+Thrillers: 2313
+Mystery & Detective: 2226
+Historical: 1850
+Suspense: 1811
+Contemporary: 1420
+Literary: 1416
+Action & Adventure: 977
+Fantasy: 944
+Juvenile Fiction: 931
+Science Fiction: 898
+Women: 872
+Women Sleuths: 731
+Classics: 702
+Psychological: 691
+Horror: 638
+Family Life: 566
+Biography & Autobiography: 518
+City Life: 508
+Sagas: 449
+Espionage: 372
+Crime: 366
+Humorous: 356
+Police Procedural: 354
+Erotic: 307
+Humor: 299
+Social Science: 292
+Southern: 290
+Epic: 284
+History: 259
+Media Tie-In: 258
+Legal: 241
+Social Themes: 236
+Self-Help: 234
+United States: 222
+Fantasy & Magic: 222
+Traditional: 217
+Animals: 212
+Private Investigators: 208
+20th Century: 199
+Religion: 197
+CHILDREN'S FICTION: 196
+FICTION_GENERAL: 192
+Political: 188
+Medical: 185
+Space Opera: 182
+Family: 175
+Siblings: 174
+Hard-Boiled: 172
+
+Top 50 Genres:
+Fiction: 9911
+Romance: 2458
+Mystery & Detective: 1859
+Historical: 1388
+Thrillers: 1329
+Literary: 1118
+Contemporary: 925
+Juvenile Fiction: 864
+Fantasy: 806
+Science Fiction: 630
+Classics: 554
+Action & Adventure: 550
+Horror: 548
+Biography & Autobiography: 476
+Suspense: 461
+Women Sleuths: 426
+Women: 406
+Psychological: 380
+Sagas: 315
+Espionage: 274
+Humorous: 261
+Erotic: 236
+Epic: 232
+Humor: 230
+Police Procedural: 223
+Family Life: 199
+CHILDREN'S FICTION: 192
+FICTION_GENERAL: 183
+Media Tie-In: 179
+History: 151
+Hard-Boiled: 131
+Self-Help: 131
+Family & Relationships: 122
+Animals: 120
+Fantasy & Magic: 118
+Literature & Fiction: 117
+Religious: 117
+Traditional: 115
+Religion: 111
+Social Science: 105
+Family: 99
+FICTION_PSYCHOLOGICAL: 98
+FICTION_MYSTERY & DETECTIVE_GENERAL: 96
+FICTION_HISTORICAL_GENERAL: 92
+Personal Memoirs: 88
+FICTION_THRILLERS_SUSPENSE: 87
+Body: 84
+Social Themes: 83
+Space Opera: 83
+Mind & Spirit: 82
