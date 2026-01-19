@@ -23,11 +23,11 @@ Data: 2025
 =============================================================================
 """
 
+from pathlib import Path
+from typing import List, Optional, Dict
+
 import gradio as gr
 import pandas as pd
-import numpy as np
-from pathlib import Path
-from typing import List, Tuple, Optional, Dict
 
 # =============================================================================
 # CONFIGURARE
@@ -84,23 +84,49 @@ YEAR_RANGES = {
 # Placeholder image pentru carti fara imagine
 PLACEHOLDER_IMAGE = "https://via.placeholder.com/150x220?text=No+Cover"
 
-
 # =============================================================================
 # SISTEM DE RECOMANDARE
 # =============================================================================
 
+# Incearca sa importe engine-ul complet
+try:
+    from hybrid_recommender import BookRecommendationEngine, create_recommendation_engine
+
+    ENGINE_AVAILABLE = True
+except ImportError:
+    ENGINE_AVAILABLE = False
+    print("Engine complet nu e disponibil, folosesc versiunea simplificata")
+
+
 class BookRecommender:
-    """Sistem de recomandare carti"""
+    """Sistem de recomandare carti - wrapper pentru engine"""
 
     def __init__(self, data_dir: Path = DATA_DIR):
         self.data_dir = data_dir
         self.books = None
         self.ratings = None
-        self.load_data()
+        self.engine = None
+
+        # Incearca sa foloseasca engine-ul complet
+        if ENGINE_AVAILABLE:
+            try:
+                self.engine = create_recommendation_engine(
+                    data_dir=str(data_dir),
+                    load_bert=True,
+                    load_cf=True
+                )
+                self.books = self.engine.books
+                print("Engine complet initializat!")
+            except Exception as e:
+                print(f"Eroare la initializare engine: {e}")
+                self.engine = None
+
+        # Fallback la incarcare simpla
+        if self.engine is None:
+            self.load_data()
 
     def load_data(self):
-        """Incarca datele"""
-        # Books
+        """Incarca datele (fallback)"""
         books_path = self.data_dir / 'books_processed.csv'
         if books_path.exists():
             self.books = pd.read_csv(books_path)
@@ -109,7 +135,6 @@ class BookRecommender:
             print(f"ATENTIE: {books_path} nu exista!")
             self.books = pd.DataFrame()
 
-        # Books enriched (cu genuri, imagini)
         enriched_path = self.data_dir / 'books_enriched.csv'
         if enriched_path.exists() and not self.books.empty:
             enriched = pd.read_csv(enriched_path)
@@ -125,92 +150,71 @@ class BookRecommender:
                 )
             print(f"Books enriched merged")
 
-        # Ratings
         ratings_path = self.data_dir / 'ratings_processed.csv'
         if ratings_path.exists():
             self.ratings = pd.read_csv(ratings_path)
             print(f"Ratings: {len(self.ratings)}")
 
     def get_recommendations(self, user_profile: Dict, n: int = 12) -> List[Dict]:
-        """
-        Genereaza recomandari bazate pe profilul utilizatorului
+        """Genereaza recomandari"""
+        # Foloseste engine-ul daca e disponibil
+        if self.engine is not None:
+            return self.engine.get_recommendations(user_profile, n)
 
-        Args:
-            user_profile: {
-                "favorite_genres": [...],
-                "favorite_subjects": [...],
-                "preferred_year_range": (min, max),
-                "age": int,
-                "language": "en",
-                "user_read_history": [(isbn, rating), ...]
-            }
-            n: numar de recomandari
+        # Fallback simplu
+        return self._simple_recommendations(user_profile, n)
 
-        Returns:
-            Lista de dictionare cu info despre carti
-        """
+    def _simple_recommendations(self, user_profile: Dict, n: int = 12) -> List[Dict]:
+        """Recomandari simple (fallback fara BERT/CF)"""
         if self.books is None or self.books.empty:
             return []
 
         candidates = self.books.copy()
 
-        # Extrage din profil
         genres = user_profile.get('favorite_genres', [])
         subjects = user_profile.get('favorite_subjects', [])
         year_range = user_profile.get('preferred_year_range')
         language = user_profile.get('language')
         read_history = user_profile.get('user_read_history', [])
 
-        # ISBN-uri citite (pentru excludere)
         read_isbns = set(str(item[0]) for item in read_history)
 
-        # Filtru year range
         if year_range:
-            min_year, max_year = year_range
             candidates = candidates[
-                (candidates['Year'] >= min_year) &
-                (candidates['Year'] <= max_year)
-            ]
+                (candidates['Year'] >= year_range[0]) &
+                (candidates['Year'] <= year_range[1])
+                ]
 
-        # Filtru limba
         if language and 'language' in candidates.columns:
             candidates = candidates[candidates['language'] == language]
 
-        # Calculeaza scor pentru fiecare carte
         def calculate_score(row):
             score = 0.0
-
-            # Match genuri
             if pd.notna(row.get('genres')):
                 book_genres = [g.strip().lower() for g in str(row['genres']).split(',')]
                 for genre in genres:
                     if any(genre.lower() in bg for bg in book_genres):
                         score += 2.0
 
-            # Match subjects
             if pd.notna(row.get('subjects')):
                 book_subjects = [s.strip().lower() for s in str(row['subjects']).split(',')]
                 for subject in subjects:
                     if any(subject.lower() in bs for bs in book_subjects):
                         score += 1.5
-
             return score
 
         candidates['score'] = candidates.apply(calculate_score, axis=1)
-
-        # Filtreaza carti cu scor > 0 si exclude cele citite
         candidates = candidates[candidates['score'] > 0]
         candidates = candidates[~candidates['ISBN'].astype(str).isin(read_isbns)]
-
-        # Sorteaza si ia top N
         candidates = candidates.sort_values('score', ascending=False).head(n)
 
-        # Formateaza rezultate
+        placeholder = "https://via.placeholder.com/150x220?text=No+Cover"
         results = []
+
         for _, row in candidates.iterrows():
-            image_url = row.get('image_url', PLACEHOLDER_IMAGE)
+            image_url = row.get('image_url', placeholder)
             if pd.isna(image_url) or not image_url:
-                image_url = PLACEHOLDER_IMAGE
+                image_url = placeholder
 
             results.append({
                 'isbn': str(row['ISBN']),
@@ -226,6 +230,9 @@ class BookRecommender:
 
     def get_book_by_isbn(self, isbn: str) -> Optional[Dict]:
         """Gaseste o carte dupa ISBN"""
+        if self.engine is not None:
+            return self.engine.get_book_by_isbn(isbn)
+
         if self.books is None or self.books.empty:
             return None
 
@@ -234,9 +241,10 @@ class BookRecommender:
             return None
 
         row = book.iloc[0]
-        image_url = row.get('image_url', PLACEHOLDER_IMAGE)
+        placeholder = "https://via.placeholder.com/150x220?text=No+Cover"
+        image_url = row.get('image_url', placeholder)
         if pd.isna(image_url) or not image_url:
-            image_url = PLACEHOLDER_IMAGE
+            image_url = placeholder
 
         return {
             'isbn': str(row['ISBN']),
@@ -252,9 +260,9 @@ class BookRecommender:
 # INITIALIZARE
 # =============================================================================
 
-print("\n" + "="*60)
+print("\n" + "=" * 60)
 print("INITIALIZARE SISTEM DE RECOMANDARE")
-print("="*60)
+print("=" * 60)
 
 recommender = BookRecommender(DATA_DIR)
 
@@ -440,11 +448,11 @@ def clear_history():
 
 
 def generate_recommendations(
-    genre1, genre2, genre3,
-    subject1, subject2, subject3,
-    year_range_choice,
-    language_choice,
-    age
+        genre1, genre2, genre3,
+        subject1, subject2, subject3,
+        year_range_choice,
+        language_choice,
+        age
 ):
     """Genereaza recomandari bazate pe preferinte"""
     global user_profile
@@ -516,25 +524,21 @@ custom_css = """
 }
 """
 
-
 # =============================================================================
 # CONSTRUIRE INTERFATA
 # =============================================================================
 
 with gr.Blocks(title="Book Recommender", css=custom_css) as app:
-
     gr.Markdown("# Sistem de Recomandare Carti")
     gr.Markdown("Descopera carti noi bazate pe preferintele tale")
     gr.Markdown("---")
 
     with gr.Tabs() as tabs:
-
         # =================================================================
         # TAB 1: PREFERINTE SI ISTORIC
         # =================================================================
 
         with gr.Tab("1. Preferinte"):
-
             gr.Markdown("## Selecteaza Preferintele")
 
             with gr.Row():
@@ -604,7 +608,6 @@ with gr.Blocks(title="Book Recommender", css=custom_css) as app:
         # =================================================================
 
         with gr.Tab("2. Recomandari"):
-
             gr.Markdown("## Carti Recomandate pentru Tine")
 
             with gr.Row():
@@ -635,7 +638,6 @@ with gr.Blocks(title="Book Recommender", css=custom_css) as app:
         # =================================================================
 
         with gr.Tab("3. Despre"):
-
             gr.Markdown("""
             ## Cum Functioneaza
             
@@ -704,11 +706,13 @@ with gr.Blocks(title="Book Recommender", css=custom_css) as app:
         outputs=[books_display, profile_display]
     )
 
+
     # Tab 2: Adauga rapid si reincarca
     def quick_add_and_refresh(isbn, rating):
         add_result, history = add_book_by_isbn(isbn, rating)
         books_html, profile = refresh_recommendations()
         return add_result, books_html, profile
+
 
     quick_add_btn.click(
         fn=quick_add_and_refresh,
@@ -716,15 +720,14 @@ with gr.Blocks(title="Book Recommender", css=custom_css) as app:
         outputs=[quick_status, books_display, profile_display]
     )
 
-
 # =============================================================================
 # LANSARE
 # =============================================================================
 
 if __name__ == "__main__":
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("LANSARE INTERFATA GRADIO")
-    print("="*60)
+    print("=" * 60)
     print("\nAcceseaza: http://localhost:7860\n")
 
     app.launch(

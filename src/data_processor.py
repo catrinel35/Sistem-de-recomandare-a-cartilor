@@ -1,6 +1,7 @@
-import pandas as pd
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
 
 
 class BookCrossingDataLoader:
@@ -77,6 +78,109 @@ class BookCrossingDataLoader:
         self.users = users
         print(f"✓ Încărcat {len(users)} utilizatori")
         return users
+
+    # ==============================================================================
+    def enrich_user_profiles(self, enriched_books_df):
+        merged = self.ratings.merge(
+            enriched_books_df[['ISBN', 'Author', 'Year']],
+            on='ISBN',
+            how='inner'
+        )
+
+        user_stats = []
+        current_year = 2024
+
+        for user_id, group in merged.groupby('User-ID'):
+            total_r = len(group)
+            explicit_ratings_df = group[group['Rating'] > 0]
+            num_explicit = len(explicit_ratings_df)
+
+            stats = {
+                'User-ID': user_id,
+                'total_ratings': total_r,
+                'explicit_ratings': num_explicit,
+                'avg_rating': group['Rating'].mean(),
+                'rating_std': group['Rating'].std() if total_r > 1 else 0,
+                'unique_books': group['ISBN'].nunique(),
+                'author_diversity': group['Author'].nunique() / total_r,
+                'avg_book_year': group['Year'].mean(),
+                'recency_score': current_year - group['Year'].mean(),
+                'explicit_ratio': num_explicit / total_r if total_r > 0 else 0,
+                # Exploration score: raportul dintre diversitatea autorilor și consistența rating-ului
+                'exploration_score': (group['Author'].nunique() / total_r) * (
+                        1 - (group['Rating'].std() / 10 if total_r > 1 else 0))
+            }
+            user_stats.append(stats)
+
+        self.users = self.users.merge(pd.DataFrame(user_stats), on='User-ID', how='left')
+        print(f"✓ Profile utilizatori îmbogățite cu {len(user_stats)} înregistrări")
+        return self.users
+
+    def split_train_test_uniform(self, test_size=0.2):
+        train_list = []
+        test_list = []
+
+        for user_id, group in self.ratings.groupby('User-ID'):
+            if len(group) < 2:  # Useri cu un singur rating merg direct în train
+                train_list.append(group)
+                continue
+
+            test_subset = group.sample(frac=test_size, random_state=42)
+            train_subset = group.drop(test_subset.index)
+
+            test_list.append(test_subset)
+            train_list.append(train_subset)
+
+        train_df = pd.concat(train_list)
+        test_df = pd.concat(test_list)
+
+        print(f"✓ Split finalizat: Train ({len(train_df)}), Test ({len(test_df)})")
+        return train_df, test_df
+
+    def extract_user_interests(self, enriched_books_df, top_n=3):
+        """
+        Extrage tag-uri (genuri favorite), istoricul de review-uri
+        și istoricul de cărți pentru fiecare utilizator.
+        """
+        # Unificăm rating-urile cu datele despre cărți (ne interesează ISBN, Title și Genres)
+        merged = self.ratings.merge(
+            enriched_books_df[['ISBN', 'Title', 'genres']],
+            on='ISBN',
+            how='inner'
+        )
+
+        user_interests = []
+
+        print("Analiză interese utilizatori și generare tag-uri...")
+
+        for user_id, group in merged.groupby('User-ID'):
+            book_ids = group['ISBN'].tolist()
+            review_scores = group['Rating'].tolist()
+
+            all_genres = []
+            for genres_str in group['genres'].dropna():
+                all_genres.extend([g.strip() for g in genres_str.split(',')])
+
+            if all_genres:
+                fav_genres = pd.Series(all_genres).value_counts().head(top_n).index.tolist()
+            else:
+                fav_genres = []
+
+            user_interests.append({
+                'User-ID': user_id,
+                'tags': "|".join(fav_genres),
+                'book_history': "|".join(book_ids),
+                'review_history': str(review_scores)
+            })
+
+        interests_df = pd.DataFrame(user_interests)
+
+        self.users = self.users.merge(interests_df, on='User-ID', how='left')
+
+        print(f"✓ Tag-uri și istoric adăugate pentru {len(user_interests)} utilizatori")
+        return self.users
+
+    # ===========================================================================
 
     def load_ratings(self, filename='Ratings.csv'):
 
@@ -233,6 +337,16 @@ class BookCrossingDataLoader:
             self.ratings.to_csv(output_path / 'ratings_processed.csv', index=False)
             print(f"✓ Salvat ratings_processed.csv")
 
+    def save_all(self, train_df, test_df, output_dir='../data/processed'):
+        path = Path(output_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        self.books.to_csv(path / 'books_final.csv', index=False)
+        self.users.to_csv(path / 'users_final.csv', index=False)
+        train_df.to_csv(path / 'train.csv', index=False)
+        test_df.to_csv(path / 'test.csv', index=False)
+        print(f"✓ Fișiere salvate în {output_dir}")
+
+
 if __name__ == "__main__":
     loader = BookCrossingDataLoader(data_dir='../data')
     books, users, ratings = loader.load_all()
@@ -247,7 +361,20 @@ if __name__ == "__main__":
         min_user_ratings=5  # Fiecare user să aibă min 5 rating-uri
     )
 
+    # ====================================================================
+    try:
+        enriched_books = pd.read_csv('../data/processed/books_enriched.csv')
+    except:
+        print("Atenție: books_enriched.csv nu a fost găsit. Folosesc datele brute.")
+        enriched_books = loader.books
+
+    loader.filter_dataset(min_book_ratings=5, min_user_ratings=3)
+    loader.enrich_user_profiles(enriched_books)
+    loader.extract_user_interests(enriched_books)
+    train, test = loader.split_train_test_uniform()
     loader.get_statistics()
+    loader.save_all(train, test)
+    # ====================================================================
 
     loader.save_processed(output_dir='../data/processed')
 
