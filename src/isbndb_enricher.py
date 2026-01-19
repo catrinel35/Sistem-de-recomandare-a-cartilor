@@ -13,23 +13,9 @@ logger = logging.getLogger(__name__)
 
 
 class ISBNdbEnricher:
-    """
-    Îmbogățește dataset-ul Book-Crossing cu metadate din ISBNdb API
-
-    ISBNdb oferă:
-    - Genuri literare (subjects)
-    - Descrieri detaliate (synopsis)
-    - Categorii structurate
-    - Publisher details
-    - Cover images
-    """
 
     def __init__(self, api_key: str, data_dir='../data/processed'):
-        """
-        Args:
-            api_key: ISBNdb API key (obține de pe https://isbndb.com/apidocs/v2)
-            data_dir: Director cu datele procesate
-        """
+
         self.api_key = api_key
         self.base_url = "https://api2.isbndb.com"
         self.data_dir = Path(data_dir)
@@ -40,28 +26,18 @@ class ISBNdbEnricher:
         self.delay_between_requests = 1.0  # secunde
 
     def load_books(self):
-        """Încarcă cărțile procesate"""
+
         books_path = self.data_dir / 'books_processed.csv'
         self.books = pd.read_csv(books_path)
-        logger.info(f"✓ Încărcat {len(self.books)} cărți")
+        logger.info(f" Încărcat {len(self.books)} cărți")
         return self.books
 
     def fetch_book_metadata(self, isbn: str) -> Optional[Dict]:
-        """
-        Fetch metadate pentru un ISBN de pe ISBNdb
 
-        Args:
-            isbn: Codul ISBN al cărții
-
-        Returns:
-            Dict cu metadate sau None dacă nu găsește
-        """
-        # Rate limiting
         if self.requests_made >= self.max_requests_per_day:
             logger.warning(" Limită zilnică atinsă! Oprire.")
             return None
 
-        # Curăță ISBN (elimină spații, caractere speciale)
         isbn_clean = str(isbn).strip().replace('-', '').replace(' ', '')
 
         url = f"{self.base_url}/book/{isbn_clean}"
@@ -77,7 +53,6 @@ class ISBNdbEnricher:
             if response.status_code == 200:
                 data = response.json()
 
-                # Extrage informații relevante
                 book_data = data.get('book', {})
 
                 metadata = {
@@ -131,17 +106,10 @@ class ISBNdbEnricher:
             return None
 
     def enrich_books(self, batch_size: int = 100, start_index: int = 0):
-        """
-        Îmbogățește toate cărțile cu metadate din ISBNdb
 
-        Args:
-            batch_size: Câte cărți să proceseze (pentru a respecta rate limit)
-            start_index: De unde să înceapă (pentru reluare)
-        """
         if self.books is None:
             self.load_books()
 
-        # Creează coloane noi dacă nu există
         new_columns = ['synopsis', 'subjects', 'genres', 'language', 'pages',
                        'binding', 'image_url', 'overview']
 
@@ -175,7 +143,7 @@ class ISBNdbEnricher:
             metadata = self.fetch_book_metadata(isbn)
 
             if metadata:
-                # Actualizează DataFrame
+
                 self.books.at[idx, 'synopsis'] = metadata.get('synopsis')
                 self.books.at[idx, 'subjects'] = ', '.join(metadata.get('subjects', []))
                 self.books.at[idx, 'language'] = metadata.get('language')
@@ -184,7 +152,6 @@ class ISBNdbEnricher:
                 self.books.at[idx, 'image_url'] = metadata.get('image')
                 self.books.at[idx, 'overview'] = metadata.get('overview')
 
-                # Extrage genuri principale (primele 3 subjects)
                 subjects = metadata.get('subjects', [])
                 if subjects:
                     genres = subjects[:3]  # Primele 3 ca genuri principale
@@ -195,12 +162,10 @@ class ISBNdbEnricher:
             else:
                 not_found_count += 1
 
-            # Salvare intermediară la fiecare 10 cărți
             if (idx + 1) % 10 == 0:
                 self.save_enriched_books(suffix=f'_checkpoint_{idx + 1}')
                 logger.info(f"💾 Checkpoint salvat la index {idx + 1}")
 
-        # Salvare finală
         self.save_enriched_books()
 
         logger.info(f"\n Îmbogățire completă!")
@@ -210,13 +175,11 @@ class ISBNdbEnricher:
         logger.info(f"   Requests folosite: {self.requests_made}/{self.max_requests_per_day}")
 
     def save_enriched_books(self, suffix=''):
-        """Salvează cărțile îmbogățite"""
         output_path = self.data_dir / f'books_enriched{suffix}.csv'
         self.books.to_csv(output_path, index=False)
         logger.info(f" Salvat: {output_path}")
 
     def get_enrichment_stats(self):
-        """Statistici despre îmbogățire"""
         if self.books is None:
             self.load_books()
 
@@ -247,12 +210,10 @@ class ISBNdbEnricher:
         return stats
 
     def extract_top_genres(self, top_n=20):
-        """Extrage top N genuri din dataset"""
         if self.books is None or 'subjects' not in self.books.columns:
             logger.error("Nu există date de genuri!")
             return None
 
-        # Split subjects și numără
         all_subjects = []
         for subjects_str in self.books['subjects'].dropna():
             subjects = [s.strip() for s in subjects_str.split(',')]
@@ -270,24 +231,18 @@ class ISBNdbEnricher:
 
 
 class ISBNdbBatchProcessor:
-    """
-    Procesare în batch-uri pentru respectarea rate limit-ului
-    Permite procesarea completă a dataset-ului în mai multe zile
-    """
 
     def __init__(self, api_key: str, data_dir='../data/processed'):
         self.enricher = ISBNdbEnricher(api_key, data_dir)
         self.progress_file = Path(data_dir) / 'enrichment_progress.json'
 
     def load_progress(self):
-        """Încarcă progresul salvat"""
         if self.progress_file.exists():
             with open(self.progress_file, 'r') as f:
                 return json.load(f)
         return {'last_index': 0, 'requests_today': 0, 'date': None}
 
     def save_progress(self, last_index: int, requests_today: int):
-        """Salvează progresul"""
         from datetime import date
         progress = {
             'last_index': last_index,
@@ -298,18 +253,14 @@ class ISBNdbBatchProcessor:
             json.dump(progress, f)
 
     def process_daily_batch(self, max_requests=900):
-        """
-        Procesează un batch zilnic (lasă 100 requests buffer)
-        """
+
         from datetime import date
 
         progress = self.load_progress()
 
-        # Reset dacă e o zi nouă
         if progress['date'] != str(date.today()):
             progress['requests_today'] = 0
 
-        # Calculează câte mai putem face azi
         remaining = max_requests - progress['requests_today']
 
         if remaining <= 0:
@@ -318,12 +269,10 @@ class ISBNdbBatchProcessor:
 
         logger.info(f" Procesare batch: {remaining} requests disponibile")
 
-        # Procesează
         start_idx = progress['last_index']
         self.enricher.load_books()
         self.enricher.enrich_books(batch_size=remaining, start_index=start_idx)
 
-        # Salvează progres
         end_idx = start_idx + self.enricher.requests_made
         self.save_progress(end_idx, progress['requests_today'] + self.enricher.requests_made)
 
@@ -338,14 +287,10 @@ class ISBNdbBatchProcessor:
 if __name__ == "__main__":
     # ========== CONFIGURARE ==========
 
-    # IMPORTANT: Obține API key de pe https://isbndb.com/apidocs/v2
-    # Free tier: 1000 requests/day
-    API_KEY = "66605_39b09023b3f5eda4fae34d619fb5b2ef"  # ← ÎNLOCUIEȘTE CU KEY-UL TĂU!
 
-    # ========== OPȚIUNEA 1: Procesare simplă (manual) ==========
+    API_KEY = "66605_39b09023b3f5eda4fae34d619fb5b2ef"
 
-    print("\n" + "=" * 60)
-    print("OPȚIUNEA 1: Procesare Simplă")
+    print("Procesare Simplă")
     print("=" * 60)
 
     enricher = ISBNdbEnricher(api_key=API_KEY, data_dir='../data/processed')
@@ -353,47 +298,16 @@ if __name__ == "__main__":
     # Încarcă cărțile
     enricher.load_books()
 
-    # Îmbogățește primele 10 cărți (pentru test)
-    # enricher.enrich_books(batch_size=10, start_index=0)
-
     # Statistici
     enricher.get_enrichment_stats()
 
-    # ========== OPȚIUNEA 2: Procesare în batch-uri (recomandat) ==========
-
     print("\n\n" + "=" * 60)
-    print("OPȚIUNEA 2: Procesare în Batch-uri (Automată)")
+    print("Procesare în Batch-uri (Automată)")
     print("=" * 60)
 
-    # Procesare automată cu respectarea rate limit-ului
     batch_processor = ISBNdbBatchProcessor(
         api_key=API_KEY,
         data_dir='../data/processed'
     )
-
-    # Procesează batch-ul zilnic
-    # Rulează acest script o dată pe zi până se procesează tot dataset-ul
     batch_processor.process_daily_batch(max_requests=4999)
 
-    # ========== OPȚIUNEA 3: Continuare de unde ai rămas ==========
-
-    print("\n\n" + "=" * 60)
-    print("OPȚIUNEA 3: Reluare Îmbogățire")
-    print("=" * 60)
-
-    # Dacă ai oprit procesul, poți relua:
-    # enricher.load_books()
-    # enricher.enrich_books(batch_size=100, start_index=500)  # continuă de la index 500
-
-    # ========== ANALIZĂ DUPĂ ÎMBOGĂȚIRE ==========
-
-    print("\n\n" + "=" * 60)
-    print("ANALIZĂ DATASET ÎMBOGĂȚIT")
-    print("=" * 60)
-
-    # Statistici
-    # enricher.load_books()
-    # enricher.get_enrichment_stats()
-
-    # Top genuri
-    # enricher.extract_top_genres(top_n=20)

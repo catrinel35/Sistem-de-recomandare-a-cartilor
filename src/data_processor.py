@@ -337,15 +337,6 @@ class BookCrossingDataLoader:
             self.ratings.to_csv(output_path / 'ratings_processed.csv', index=False)
             print(f"✓ Salvat ratings_processed.csv")
 
-    def save_all(self, train_df, test_df, output_dir='../data/processed'):
-        path = Path(output_dir)
-        path.mkdir(parents=True, exist_ok=True)
-        self.books.to_csv(path / 'books_final.csv', index=False)
-        self.users.to_csv(path / 'users_final.csv', index=False)
-        train_df.to_csv(path / 'train.csv', index=False)
-        test_df.to_csv(path / 'test.csv', index=False)
-        print(f"✓ Fișiere salvate în {output_dir}")
-
 
 if __name__ == "__main__":
     loader = BookCrossingDataLoader(data_dir='../data')
@@ -360,21 +351,6 @@ if __name__ == "__main__":
         min_book_ratings=10,  # Fiecare carte să aibă min 10 rating-uri
         min_user_ratings=5  # Fiecare user să aibă min 5 rating-uri
     )
-
-    # ====================================================================
-    try:
-        enriched_books = pd.read_csv('../data/processed/books_enriched.csv')
-    except:
-        print("Atenție: books_enriched.csv nu a fost găsit. Folosesc datele brute.")
-        enriched_books = loader.books
-
-    loader.filter_dataset(min_book_ratings=5, min_user_ratings=3)
-    loader.enrich_user_profiles(enriched_books)
-    loader.extract_user_interests(enriched_books)
-    train, test = loader.split_train_test_uniform()
-    loader.get_statistics()
-    loader.save_all(train, test)
-    # ====================================================================
 
     loader.save_processed(output_dir='../data/processed')
 

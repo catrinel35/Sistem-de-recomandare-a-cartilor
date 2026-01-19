@@ -1,17 +1,3 @@
-"""
-=============================================================================
-HYBRID RECOMMENDER - INTEGRARE COMPLETA
-=============================================================================
-
-Integreaza toate componentele:
-1. RecommenderManager (CF: SVD, KNN) - din recommended_models.py
-2. BERT Embeddings - din fisierele .npy pre-generate
-3. Hybrid Scoring - din book_scoring.ipynb
-
-Autor: Echipa Proiect
-Data: 2025
-=============================================================================
-"""
 
 import numpy as np
 import pandas as pd
@@ -20,11 +6,9 @@ from typing import Dict, List, Tuple, Optional
 import pickle
 from sklearn.model_selection import train_test_split
 
-# Import custom CF models
 from svd import CustomSVD
 from knn import CustomKNN
 
-# BERT (optional - doar pentru user queries noi)
 try:
     from sentence_transformers import SentenceTransformer
     BERT_AVAILABLE = True
@@ -48,9 +32,6 @@ SCORING_WEIGHTS = {
 
 
 class HybridRecommender:
-    """
-    Sistem hibrid de recomandare
-    """
 
     def __init__(self, data_dir: str = '../data/processed', test_size: float = 0.2):
         self.data_dir = Path(data_dir)
@@ -88,7 +69,6 @@ class HybridRecommender:
     # =========================================================================
 
     def _load_data(self):
-        """Incarca toate datele necesare"""
         print("\n" + "="*50)
         print("INCARCARE DATE")
         print("="*50)
@@ -101,7 +81,6 @@ class HybridRecommender:
         self._compute_popularity()
 
     def _load_books(self) -> pd.DataFrame:
-        """Incarca books_enriched.csv"""
         books_path = self.data_dir / 'books_enriched.csv'
         if not books_path.exists():
             books_path = self.data_dir / 'books_processed.csv'
@@ -112,14 +91,12 @@ class HybridRecommender:
         books = pd.read_csv(books_path)
         books['ISBN'] = books['ISBN'].astype(str)
 
-        # Creeaza mapping ISBN -> index
         self.isbn_to_idx = {isbn: idx for idx, isbn in enumerate(books['ISBN'])}
 
         print(f"Books loaded: {len(books)}")
         return books
 
     def _load_users(self) -> Optional[pd.DataFrame]:
-        """Incarca users"""
         users_path = self.data_dir / 'users_enriched.csv'
         if not users_path.exists():
             users_path = self.data_dir / 'users_processed.csv'
@@ -127,7 +104,6 @@ class HybridRecommender:
         if users_path.exists():
             users = pd.read_csv(users_path)
 
-            # Creeaza mapping User-ID -> index
             self.user_to_idx = {uid: idx for idx, uid in enumerate(users['User-ID'])}
 
             print(f"Users loaded: {len(users)}")
@@ -137,7 +113,6 @@ class HybridRecommender:
         return None
 
     def _load_ratings(self) -> pd.DataFrame:
-        """Incarca ratings"""
         ratings_path = self.data_dir / 'ratings_processed.csv'
 
         if not ratings_path.exists():
@@ -146,11 +121,9 @@ class HybridRecommender:
         ratings = pd.read_csv(ratings_path)
         ratings['ISBN'] = ratings['ISBN'].astype(str)
 
-        # Doar rating-uri explicite
         ratings = ratings[ratings['Rating'] > 0]
         print(f"Ratings loaded (explicit): {len(ratings)}")
 
-        # Filtram ISBN-uri valide
         valid_isbns = set(self.books_df['ISBN'])
         ratings = ratings[ratings['ISBN'].isin(valid_isbns)]
         print(f"Ratings after ISBN filter: {len(ratings)}")
@@ -158,7 +131,6 @@ class HybridRecommender:
         return ratings
 
     def _create_train_test_split(self):
-        """Creeaza train/test split"""
         self.train_df, self.test_df = train_test_split(
             self.ratings_df,
             test_size=self.test_size,
@@ -167,7 +139,6 @@ class HybridRecommender:
         print(f"Train: {len(self.train_df)}, Test: {len(self.test_df)}")
 
     def _build_user_item_matrix(self):
-        """Construieste matricea User-Item"""
         print("Building User-Item matrix...")
         self.user_item_matrix = self.train_df.pivot(
             index='User-ID',
@@ -177,7 +148,6 @@ class HybridRecommender:
         print(f"Matrix shape: {self.user_item_matrix.shape}")
 
     def _compute_popularity(self):
-        """Calculeaza popularitatea cartilor"""
         stats = self.ratings_df.groupby('ISBN').agg({
             'Rating': ['count', 'mean']
         }).reset_index()
@@ -197,13 +167,6 @@ class HybridRecommender:
     def load_embeddings(self,
                         books_emb_path: str = None,
                         users_emb_path: str = None) -> bool:
-        """
-        Incarca embeddings din fisiere .npy
-
-        Args:
-            books_emb_path: Calea catre books_embeddings.npy
-            users_emb_path: Calea catre user_embeddings.npy
-        """
         print("\n" + "="*50)
         print("INCARCARE EMBEDDINGS")
         print("="*50)
@@ -235,7 +198,6 @@ class HybridRecommender:
         return self.book_embeddings is not None
 
     def load_bert_model(self, model_name: str = 'all-MiniLM-L6-v2') -> bool:
-        """Incarca modelul BERT pentru encoding preferinte noi"""
         if not BERT_AVAILABLE:
             print("BERT not available")
             return False
@@ -247,14 +209,11 @@ class HybridRecommender:
 
     def _get_bert_similarity_scores(self, user_profile: Dict,
                                     candidate_isbns: List[str]) -> Dict[str, float]:
-        """
-        Calculeaza similaritatea BERT intre preferintele user-ului si carti
-        Foloseste embeddings pre-calculate
-        """
+
         if self.book_embeddings is None:
             return {}
 
-        # Daca avem model BERT, cream embedding din preferinte
+
         if self.bert_model is not None:
             user_embedding = self._create_user_preference_embedding(user_profile)
         else:
@@ -282,7 +241,7 @@ class HybridRecommender:
         return similarities
 
     def _create_user_preference_embedding(self, user_profile: Dict) -> Optional[np.ndarray]:
-        """Creeaza embedding din preferintele text ale user-ului"""
+
         if self.bert_model is None:
             return None
 
@@ -352,7 +311,6 @@ class HybridRecommender:
     # =========================================================================
 
     def train_cf_models(self, n_factors: int = 50, k: int = 20):
-        """Antreneaza modelele CF"""
         print("\n" + "="*50)
         print("ANTRENARE MODELE CF")
         print("="*50)
@@ -375,7 +333,6 @@ class HybridRecommender:
         print("\nCF models trained!")
 
     def save_cf_models(self, path: str = None):
-        """Salveaza modelele CF"""
         if path is None:
             path = self.data_dir / 'cf_models.pkl'
 
@@ -389,7 +346,6 @@ class HybridRecommender:
         print(f"CF models saved to {path}")
 
     def load_cf_models(self, path: str = None) -> bool:
-        """Incarca modelele CF"""
         if path is None:
             path = self.data_dir / 'cf_models.pkl'
 
@@ -408,7 +364,6 @@ class HybridRecommender:
         return True
 
     def _get_cf_score(self, user_history: List[Tuple], candidate_isbn: str) -> float:
-        """Calculeaza scorul CF pentru o carte"""
         if not user_history or self.knn_item_model is None:
             return 0.5
 
@@ -529,26 +484,43 @@ class HybridRecommender:
 
         genres = user_profile.get('favorite_genres', [])
         subjects = user_profile.get('favorite_subjects', [])
-        year_range = user_profile.get('preferred_year_range')
-        language = user_profile.get('language')
         read_history = user_profile.get('user_read_history', [])
-
-        exclude_isbns = set(str(isbn) for isbn, _ in read_history)
+        print("\n===== DEBUG RECOMMENDER =====")
 
         candidates = self.books_df.copy()
+        print("Initial candidates:", len(candidates))
+
+        year_range = user_profile.get('preferred_year_range')
+        language = user_profile.get('language')
+        exclude_isbns = set(user_profile.get('user_read_history', []))
 
         if year_range:
-            candidates = candidates[
-                (candidates['Year'] >= year_range[0]) &
-                (candidates['Year'] <= year_range[1])
-            ]
+            print("Applying year filter:", year_range)
+            print("Before year filter:", len(candidates))
+
+            years = pd.to_numeric(candidates['Year'], errors='coerce')
+            candidates = candidates[years.between(year_range[0], year_range[1])]
+
+            print("After year filter:", len(candidates))
 
         if language and 'language' in candidates.columns:
+            print("Applying language filter:", language)
+            print("Before language filter:", len(candidates))
+
             candidates = candidates[candidates['language'] == language]
 
-        candidates = candidates[~candidates['ISBN'].isin(exclude_isbns)]
+            print("After language filter:", len(candidates))
+
+        if exclude_isbns:
+            print("Excluding read ISBNs:", len(exclude_isbns))
+            print("Before ISBN exclusion:", len(candidates))
+
+            candidates = candidates[~candidates['ISBN'].isin(exclude_isbns)]
+
+            print("After ISBN exclusion:", len(candidates))
 
         if candidates.empty:
+            print(">>> NO CANDIDATES LEFT – returning empty list")
             return []
 
         candidate_isbns = candidates['ISBN'].tolist()
@@ -592,7 +564,6 @@ class HybridRecommender:
         return results
 
     def get_book_by_isbn(self, isbn: str) -> Optional[Dict]:
-        """Gaseste o carte dupa ISBN"""
         if self.books_df is None:
             return None
 
@@ -627,24 +598,7 @@ def create_hybrid_recommender(
     load_bert: bool = False,
     load_cf: bool = True
 ) -> HybridRecommender:
-    """
-    Creeaza si initializeaza sistemul de recomandare
 
-    Args:
-        data_dir: Directorul cu datele procesate
-        books_emb_path: Calea catre books_embeddings.npy (optional)
-        users_emb_path: Calea catre user_embeddings.npy (optional)
-        load_bert: Daca sa incarce modelul BERT pentru query-uri noi
-        load_cf: Daca sa antreneze/incarce modele CF
-
-    Usage:
-        recommender = create_hybrid_recommender(
-            data_dir='../data/processed',
-            books_emb_path='../data/processed/books_embeddings.npy',
-            users_emb_path='../data/processed/user_embeddings.npy'
-        )
-        recs = recommender.get_recommendations(user_profile)
-    """
     recommender = HybridRecommender(data_dir=data_dir)
 
     # Embeddings .npy
@@ -676,8 +630,8 @@ if __name__ == "__main__":
     # Initializare cu embeddings .npy
     recommender = create_hybrid_recommender(
         data_dir='../data/processed',
-        books_emb_path='../data/embeddings/book_embeddings.npy',
-        users_emb_path='../data/embeddings/user_embedding.npy',
+        books_emb_path='../data/processed/book_embeddings.npy',
+        users_emb_path='../data/processed/user_embedding.npy',
         load_bert=False,  # Nu avem nevoie de BERT daca avem .npy
         load_cf=True
     )

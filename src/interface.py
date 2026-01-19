@@ -1,30 +1,5 @@
-"""
-=============================================================================
-INTERFATA GRADIO - SISTEM DE RECOMANDARE CARTI
-=============================================================================
-
-Flow:
-1. Tab 1: Selectare preferinte + adaugare carti citite dupa ISBN
-2. Click "Gaseste Recomandari" -> Tab 2
-3. Tab 2: Grid de carti cu imagini, titlu, autor, an, genuri
-
-Backend format:
-user_profile = {
-    "favorite_genres": ["Fantasy", "Action & Adventure"],
-    "favorite_subjects": ["Romance", "Espionage"],
-    "preferred_year_range": (2000, 2025),
-    "age": 35,
-    "language": "en",
-    "user_read_history": [(isbn, rating), ...]
-}
-
-Autor: Echipa Proiect
-Data: 2025
-=============================================================================
-"""
-
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Dict
 
 import gradio as gr
 import pandas as pd
@@ -81,192 +56,137 @@ YEAR_RANGES = {
     '1990-2005': (1990, 2005)
 }
 
-# Placeholder image pentru carti fara imagine
+
 PLACEHOLDER_IMAGE = "https://via.placeholder.com/150x220?text=No+Cover"
 
-# =============================================================================
-# SISTEM DE RECOMANDARE
-# =============================================================================
-
-# Incearca sa importe engine-ul complet
 try:
-    from hybrid_recommender import BookRecommendationEngine, create_recommendation_engine
+    from hybrid_recommender import HybridRecommender, create_hybrid_recommender
 
-    ENGINE_AVAILABLE = True
-except ImportError:
-    ENGINE_AVAILABLE = False
-    print("Engine complet nu e disponibil, folosesc versiunea simplificata")
-
-
-class BookRecommender:
-    """Sistem de recomandare carti - wrapper pentru engine"""
-
-    def __init__(self, data_dir: Path = DATA_DIR):
-        self.data_dir = data_dir
-        self.books = None
-        self.ratings = None
-        self.engine = None
-
-        # Incearca sa foloseasca engine-ul complet
-        if ENGINE_AVAILABLE:
-            try:
-                self.engine = create_recommendation_engine(
-                    data_dir=str(data_dir),
-                    load_bert=True,
-                    load_cf=True
-                )
-                self.books = self.engine.books
-                print("Engine complet initializat!")
-            except Exception as e:
-                print(f"Eroare la initializare engine: {e}")
-                self.engine = None
-
-        # Fallback la incarcare simpla
-        if self.engine is None:
-            self.load_data()
-
-    def load_data(self):
-        """Incarca datele (fallback)"""
-        books_path = self.data_dir / 'books_processed.csv'
-        if books_path.exists():
-            self.books = pd.read_csv(books_path)
-            print(f"Books: {len(self.books)}")
-        else:
-            print(f"ATENTIE: {books_path} nu exista!")
-            self.books = pd.DataFrame()
-
-        enriched_path = self.data_dir / 'books_enriched.csv'
-        if enriched_path.exists() and not self.books.empty:
-            enriched = pd.read_csv(enriched_path)
-            merge_cols = ['ISBN']
-            for col in ['genres', 'subjects', 'image_url', 'language', 'synopsis']:
-                if col in enriched.columns:
-                    merge_cols.append(col)
-
-            if len(merge_cols) > 1:
-                self.books = self.books.merge(
-                    enriched[merge_cols].drop_duplicates(),
-                    on='ISBN', how='left'
-                )
-            print(f"Books enriched merged")
-
-        ratings_path = self.data_dir / 'ratings_processed.csv'
-        if ratings_path.exists():
-            self.ratings = pd.read_csv(ratings_path)
-            print(f"Ratings: {len(self.ratings)}")
-
-    def get_recommendations(self, user_profile: Dict, n: int = 12) -> List[Dict]:
-        """Genereaza recomandari"""
-        # Foloseste engine-ul daca e disponibil
-        if self.engine is not None:
-            return self.engine.get_recommendations(user_profile, n)
-
-        # Fallback simplu
-        return self._simple_recommendations(user_profile, n)
-
-    def _simple_recommendations(self, user_profile: Dict, n: int = 12) -> List[Dict]:
-        """Recomandari simple (fallback fara BERT/CF)"""
-        if self.books is None or self.books.empty:
-            return []
-
-        candidates = self.books.copy()
-
-        genres = user_profile.get('favorite_genres', [])
-        subjects = user_profile.get('favorite_subjects', [])
-        year_range = user_profile.get('preferred_year_range')
-        language = user_profile.get('language')
-        read_history = user_profile.get('user_read_history', [])
-
-        read_isbns = set(str(item[0]) for item in read_history)
-
-        if year_range:
-            candidates = candidates[
-                (candidates['Year'] >= year_range[0]) &
-                (candidates['Year'] <= year_range[1])
-                ]
-
-        if language and 'language' in candidates.columns:
-            candidates = candidates[candidates['language'] == language]
-
-        def calculate_score(row):
-            score = 0.0
-            if pd.notna(row.get('genres')):
-                book_genres = [g.strip().lower() for g in str(row['genres']).split(',')]
-                for genre in genres:
-                    if any(genre.lower() in bg for bg in book_genres):
-                        score += 2.0
-
-            if pd.notna(row.get('subjects')):
-                book_subjects = [s.strip().lower() for s in str(row['subjects']).split(',')]
-                for subject in subjects:
-                    if any(subject.lower() in bs for bs in book_subjects):
-                        score += 1.5
-            return score
-
-        candidates['score'] = candidates.apply(calculate_score, axis=1)
-        candidates = candidates[candidates['score'] > 0]
-        candidates = candidates[~candidates['ISBN'].astype(str).isin(read_isbns)]
-        candidates = candidates.sort_values('score', ascending=False).head(n)
-
-        placeholder = "https://via.placeholder.com/150x220?text=No+Cover"
-        results = []
-
-        for _, row in candidates.iterrows():
-            image_url = row.get('image_url', placeholder)
-            if pd.isna(image_url) or not image_url:
-                image_url = placeholder
-
-            results.append({
-                'isbn': str(row['ISBN']),
-                'title': row['Title'],
-                'author': row['Author'],
-                'year': int(row['Year']) if pd.notna(row.get('Year')) else 'N/A',
-                'genres': row.get('genres', 'N/A') if pd.notna(row.get('genres')) else 'N/A',
-                'image_url': image_url,
-                'score': round(row['score'], 2)
-            })
-
-        return results
-
-    def get_book_by_isbn(self, isbn: str) -> Optional[Dict]:
-        """Gaseste o carte dupa ISBN"""
-        if self.engine is not None:
-            return self.engine.get_book_by_isbn(isbn)
-
-        if self.books is None or self.books.empty:
-            return None
-
-        book = self.books[self.books['ISBN'].astype(str) == str(isbn)]
-        if book.empty:
-            return None
-
-        row = book.iloc[0]
-        placeholder = "https://via.placeholder.com/150x220?text=No+Cover"
-        image_url = row.get('image_url', placeholder)
-        if pd.isna(image_url) or not image_url:
-            image_url = placeholder
-
-        return {
-            'isbn': str(row['ISBN']),
-            'title': row['Title'],
-            'author': row['Author'],
-            'year': int(row['Year']) if pd.notna(row.get('Year')) else 'N/A',
-            'genres': row.get('genres', 'N/A') if pd.notna(row.get('genres')) else 'N/A',
-            'image_url': image_url
-        }
-
+    HYBRID_AVAILABLE = True
+    print("HybridRecommender importat cu succes!")
+except ImportError as e:
+    HYBRID_AVAILABLE = False
+    print(f"HybridRecommender nu e disponibil: {e}")
 
 # =============================================================================
-# INITIALIZARE
+# INITIALIZARE SISTEM
 # =============================================================================
 
 print("\n" + "=" * 60)
 print("INITIALIZARE SISTEM DE RECOMANDARE")
 print("=" * 60)
 
-recommender = BookRecommender(DATA_DIR)
+recommender = None
 
-# State global pentru profilul utilizatorului
+if HYBRID_AVAILABLE:
+    try:
+        recommender = create_hybrid_recommender(
+            data_dir=str(DATA_DIR),
+            books_emb_path=str(DATA_DIR / 'book_embeddings.npy'),
+            users_emb_path=str(DATA_DIR / 'user_embedding.npy'),
+            load_bert=False,  # Folosim embeddings pre-calculate
+            load_cf=True
+        )
+        print("HybridRecommender initializat cu succes!")
+    except Exception as e:
+        print(f"Eroare la initializare HybridRecommender: {e}")
+        recommender = None
+
+# Fallback simplu daca HybridRecommender nu functioneaza
+if recommender is None:
+    print("Folosesc fallback simplu...")
+
+
+    class SimpleRecommender:
+        def __init__(self, data_dir):
+            self.data_dir = Path(data_dir)
+            self.books_df = None
+            self._load_data()
+
+        def _load_data(self):
+            books_path = self.data_dir / 'books_enriched.csv'
+            if books_path.exists():
+                self.books_df = pd.read_csv(books_path)
+                self.books_df['ISBN'] = self.books_df['ISBN'].astype(str)
+                print(f"Books loaded: {len(self.books_df)}")
+
+        def get_recommendations(self, user_profile, n=12):
+            if self.books_df is None:
+                return []
+
+            candidates = self.books_df.copy()
+            genres = user_profile.get('favorite_genres', [])
+            subjects = user_profile.get('favorite_subjects', [])
+            year_range = user_profile.get('preferred_year_range')
+            language = user_profile.get('language')
+            read_history = user_profile.get('user_read_history', [])
+
+            read_isbns = set(str(item[0]) for item in read_history)
+
+            if year_range:
+                candidates = candidates[
+                    (candidates['Year'] >= year_range[0]) &
+                    (candidates['Year'] <= year_range[1])
+                    ]
+
+            if language and 'language' in candidates.columns:
+                candidates = candidates[candidates['language'] == language]
+
+            def calc_score(row):
+                score = 0.0
+                if pd.notna(row.get('genres')):
+                    for g in genres:
+                        if g.lower() in str(row['genres']).lower():
+                            score += 2.0
+                if pd.notna(row.get('subjects')):
+                    for s in subjects:
+                        if s.lower() in str(row['subjects']).lower():
+                            score += 1.5
+                return score
+
+            candidates['score'] = candidates.apply(calc_score, axis=1)
+            candidates = candidates[candidates['score'] > 0]
+            candidates = candidates[~candidates['ISBN'].isin(read_isbns)]
+            candidates = candidates.sort_values('score', ascending=False).head(n)
+
+            results = []
+            for _, row in candidates.iterrows():
+                img = row.get('image_url', PLACEHOLDER_IMAGE)
+                if pd.isna(img):
+                    img = PLACEHOLDER_IMAGE
+                results.append({
+                    'isbn': str(row['ISBN']),
+                    'title': row['Title'],
+                    'author': row['Author'],
+                    'year': int(row['Year']) if pd.notna(row.get('Year')) else 'N/A',
+                    'genres': row.get('genres', 'N/A') if pd.notna(row.get('genres')) else 'N/A',
+                    'image_url': img,
+                    'score': round(row['score'], 3)
+                })
+            return results
+
+        def get_book_by_isbn(self, isbn):
+            if self.books_df is None:
+                return None
+            book = self.books_df[self.books_df['ISBN'] == str(isbn)]
+            if book.empty:
+                return None
+            row = book.iloc[0]
+            img = row.get('image_url', PLACEHOLDER_IMAGE)
+            if pd.isna(img):
+                img = PLACEHOLDER_IMAGE
+            return {
+                'isbn': str(row['ISBN']),
+                'title': row['Title'],
+                'author': row['Author'],
+                'year': int(row['Year']) if pd.notna(row.get('Year')) else 'N/A',
+                'genres': row.get('genres', 'N/A') if pd.notna(row.get('genres')) else 'N/A',
+                'image_url': img
+            }
+
+
+    recommender = SimpleRecommender(DATA_DIR)
+
 user_profile = {
     "favorite_genres": [],
     "favorite_subjects": [],
@@ -282,7 +202,6 @@ user_profile = {
 # =============================================================================
 
 def create_book_card_html(book: Dict) -> str:
-    """Creeaza HTML pentru un card de carte"""
     title_display = book['title'][:45] + '...' if len(book['title']) > 45 else book['title']
     author_display = book['author'][:25] + '...' if len(book['author']) > 25 else book['author']
     genres_display = book['genres'][:35] + '...' if len(str(book['genres'])) > 35 else book['genres']
@@ -300,7 +219,7 @@ def create_book_card_html(book: Dict) -> str:
         <img src="{book['image_url']}" 
              style="width: 100px; height: 150px; object-fit: cover; border-radius: 6px; margin-bottom: 8px;"
              onerror="this.src='{PLACEHOLDER_IMAGE}'">
-        <div style="font-weight: bold; font-size: 12px; height: 32px; overflow: hidden; margin-bottom: 4px;">
+        <div style="color: #555; font-weight: bold; font-size: 12px; height: 32px; overflow: hidden; margin-bottom: 4px;">
             {title_display}
         </div>
         <div style="color: #555; font-size: 11px; margin-bottom: 2px;">
@@ -312,7 +231,10 @@ def create_book_card_html(book: Dict) -> str:
         <div style="color: #888; font-size: 9px; height: 24px; overflow: hidden;">
             {genres_display}
         </div>
-        <div style="color: #aaa; font-size: 9px; margin-top: 4px;">
+        <div style="color: #999; font-size: 9px; margin-top: 4px;">
+            Score: {book.get('score', 'N/A')}
+        </div>
+        <div style="color: #aaa; font-size: 9px; margin-top: 2px;">
             {book['isbn']}
         </div>
     </div>
@@ -320,7 +242,6 @@ def create_book_card_html(book: Dict) -> str:
 
 
 def create_books_grid_html(books: List[Dict]) -> str:
-    """Creeaza HTML grid pentru toate cartile"""
     if not books:
         return "<p style='text-align: center; color: #666; padding: 40px;'>Nu am gasit carti care sa corespunda preferintelor tale. Incearca alte filtre!</p>"
 
@@ -342,7 +263,6 @@ def create_books_grid_html(books: List[Dict]) -> str:
 
 
 def format_read_history() -> str:
-    """Formateaza istoricul de lectura"""
     global user_profile
 
     history = user_profile.get('user_read_history', [])
@@ -365,32 +285,31 @@ def format_read_history() -> str:
 
 
 def get_current_profile_summary() -> str:
-    """Returneaza un sumar al profilului curent"""
     global user_profile
 
     lines = []
 
     if user_profile['favorite_genres']:
-        lines.append(f"Genuri: {', '.join(user_profile['favorite_genres'])}")
+        lines.append(f"**Genuri:** {', '.join(user_profile['favorite_genres'])}")
 
     if user_profile['favorite_subjects']:
-        lines.append(f"Tematici: {', '.join(user_profile['favorite_subjects'])}")
+        lines.append(f"**Tematici:** {', '.join(user_profile['favorite_subjects'])}")
 
     if user_profile['preferred_year_range']:
         yr = user_profile['preferred_year_range']
-        lines.append(f"Perioada: {yr[0]}-{yr[1]}")
+        lines.append(f"**Perioada:** {yr[0]}-{yr[1]}")
 
     if user_profile['language']:
         lang_name = AVAILABLE_LANGUAGES.get(user_profile['language'], user_profile['language'])
-        lines.append(f"Limba: {lang_name}")
+        lines.append(f"**Limba:** {lang_name}")
 
     if user_profile['age']:
-        lines.append(f"Varsta: {user_profile['age']}")
+        lines.append(f"**Varsta:** {user_profile['age']}")
 
     history_count = len(user_profile.get('user_read_history', []))
-    lines.append(f"Carti citite: {history_count}")
+    lines.append(f"**Carti citite:** {history_count}")
 
-    return "\n".join(lines) if lines else "Nicio preferinta setata."
+    return "\n\n".join(lines) if lines else "Nicio preferinta setata."
 
 
 # =============================================================================
@@ -409,42 +328,18 @@ def add_book_by_isbn(isbn: str, rating: int):
 
     isbn = isbn.strip()
 
-    # Verifica daca cartea exista
     book = recommender.get_book_by_isbn(isbn)
 
     if not book:
         return f"ISBN '{isbn}' nu a fost gasit in baza de date!", format_read_history()
 
-    # Verifica daca nu e deja in istoric
     existing = [item for item in user_profile['user_read_history'] if str(item[0]) == isbn]
     if existing:
         return f"Cartea '{book['title']}' este deja in istoric!", format_read_history()
 
-    # Adauga la istoric
     user_profile['user_read_history'].append((isbn, float(rating)))
 
     return f"Adaugat: {book['title']} by {book['author']} (Rating: {rating})", format_read_history()
-
-
-def remove_last_book():
-    """Sterge ultima carte din istoric"""
-    global user_profile
-
-    if not user_profile['user_read_history']:
-        return "Istoricul este deja gol!", format_read_history()
-
-    removed = user_profile['user_read_history'].pop()
-    book = recommender.get_book_by_isbn(removed[0])
-    title = book['title'] if book else removed[0]
-
-    return f"Sters: {title}", format_read_history()
-
-
-def clear_history():
-    """Sterge tot istoricul"""
-    global user_profile
-    user_profile['user_read_history'] = []
-    return "Istoric sters!", format_read_history()
 
 
 def generate_recommendations(
@@ -454,20 +349,16 @@ def generate_recommendations(
         language_choice,
         age
 ):
-    """Genereaza recomandari bazate pe preferinte"""
     global user_profile
 
-    # Colecteaza genuri si subjects selectate
     genres = [g for g in [genre1, genre2, genre3] if g]
     subjects = [s for s in [subject1, subject2, subject3] if s]
 
     if not genres and not subjects:
         return "Selecteaza cel putin un gen sau o tematica!", ""
 
-    # Parse year range
     year_range = YEAR_RANGES.get(year_range_choice) if year_range_choice else None
 
-    # Parse language
     lang_code = None
     if language_choice:
         for code, name in AVAILABLE_LANGUAGES.items():
@@ -475,27 +366,24 @@ def generate_recommendations(
                 lang_code = code
                 break
 
-    # Actualizeaza profilul
     user_profile['favorite_genres'] = genres
     user_profile['favorite_subjects'] = subjects
     user_profile['preferred_year_range'] = year_range
     user_profile['language'] = lang_code
     user_profile['age'] = int(age) if age else None
 
-    # Genereaza recomandari
+    print(f"\nGenerating recommendations for profile: {user_profile}")
     recommendations = recommender.get_recommendations(user_profile, n=12)
+    print(f"Got {len(recommendations)} recommendations")
 
-    # Creeaza HTML pentru carti
     books_html = create_books_grid_html(recommendations)
 
-    # Sumar profil
     profile_summary = get_current_profile_summary()
 
     return books_html, profile_summary
 
 
 def refresh_recommendations():
-    """Reincarca recomandarile cu acelasi profil"""
     global user_profile
 
     if not user_profile['favorite_genres'] and not user_profile['favorite_subjects']:
@@ -508,6 +396,12 @@ def refresh_recommendations():
     return books_html, profile_summary
 
 
+def quick_add_and_refresh(isbn, rating):
+    add_result, history = add_book_by_isbn(isbn, rating)
+    books_html, profile = refresh_recommendations()
+    return add_result, books_html, profile
+
+
 # =============================================================================
 # CSS PERSONALIZAT
 # =============================================================================
@@ -515,12 +409,6 @@ def refresh_recommendations():
 custom_css = """
 .gradio-container {
     max-width: 1400px !important;
-}
-.book-grid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 15px;
-    justify-content: center;
 }
 """
 
@@ -601,8 +489,6 @@ with gr.Blocks(title="Book Recommender", css=custom_css) as app:
                 size="lg"
             )
 
-            recs_status = gr.Markdown()
-
         # =================================================================
         # TAB 2: RECOMANDARI
         # =================================================================
@@ -624,7 +510,6 @@ with gr.Blocks(title="Book Recommender", css=custom_css) as app:
 
             gr.Markdown("---")
             gr.Markdown("### Adauga Rapid o Carte Citita")
-            gr.Markdown("Copiaza ISBN-ul unei carti de mai sus si adaug-o la istoric")
 
             with gr.Row():
                 quick_isbn = gr.Textbox(label="ISBN", placeholder="Copiaza ISBN-ul aici")
@@ -640,79 +525,75 @@ with gr.Blocks(title="Book Recommender", css=custom_css) as app:
         with gr.Tab("3. Despre"):
             gr.Markdown("""
             ## Cum Functioneaza
-            
+
+            Sistemul foloseste un **algoritm hibrid** care combina:
+
+            1. **BERT Embeddings (30%)** - Similaritate semantica intre preferinte si carti
+            2. **Collaborative Filtering (25%)** - SVD si KNN bazat pe rating-uri
+            3. **Genre Matching (20%)** - Potrivire directa genuri
+            4. **Subject Matching (10%)** - Potrivire directa tematici
+            5. **Popularity (10%)** - Cat de populara e cartea
+            6. **Recency (5%)** - Cat de recenta e cartea
+
+            ---
+
             ### Pasul 1: Seteaza Preferintele
             - Selecteaza pana la 3 genuri favorite
             - Selecteaza pana la 3 tematici
             - Alege perioada de publicare (optional)
             - Selecteaza limba preferata (optional)
-            - Introdu varsta ta (optional)
-            
+
             ### Pasul 2: Adauga Carti Citite
             - Introdu ISBN-ul cartilor pe care le-ai citit
             - Da-le un rating de la 1 la 5
             - Cu cat ai mai multe carti in istoric, cu atat recomandarile sunt mai bune
-            
+
             ### Pasul 3: Primeste Recomandari
             - Apasa "Gaseste Recomandari"
             - Vezi cartile recomandate in Tab 2
-            - Poti adauga carti noi si reincarca pentru recomandari actualizate
-            
+
             ---
-            
+
             ## Dataset
-            
-            - Sursa: Book-Crossing Dataset + ISBNdb
-            - Carti: ~14,610
-            - Rating-uri: ~429,205
-            
+
+            - **Sursa:** Book-Crossing Dataset + ISBNdb API
+            - **Carti:** ~14,610 cu metadate complete
+            - **Rating-uri:** ~143,264 explicite
+            - **Utilizatori:** ~12,294
+
             ---
-            
-            ## Limbi Disponibile
-            
-            | Cod | Limba |
-            |-----|-------|
-            | en | English |
-            | de | German |
-            | es | Spanish |
-            | fr | French |
-            | it | Italian |
-            | zh | Chinese |
-            | ja | Japanese |
-            | nl | Dutch |
+
+            ## Tehnologii Folosite
+
+            | Componenta | Tehnologie |
+            |------------|------------|
+            | Embeddings | BERT (all-MiniLM-L6-v2) |
+            | CF - SVD | Custom implementation |
+            | CF - KNN | Custom (User + Item based) |
+            | Interfata | Gradio |
+            | Data Processing | Pandas, NumPy |
             """)
 
     # =================================================================
     # EVENT HANDLERS
     # =================================================================
 
-    # Tab 1: Adauga carte
     add_btn.click(
         fn=add_book_by_isbn,
         inputs=[isbn_input, rating_input],
         outputs=[add_status, history_display]
     )
 
-    # Tab 1: Genereaza recomandari
     get_recs_btn.click(
         fn=generate_recommendations,
         inputs=[genre1, genre2, genre3, subject1, subject2, subject3, year_range, language, age],
         outputs=[books_display, profile_display]
     )
 
-    # Tab 2: Refresh recomandari
     refresh_btn.click(
         fn=refresh_recommendations,
         outputs=[books_display, profile_display]
     )
-
-
-    # Tab 2: Adauga rapid si reincarca
-    def quick_add_and_refresh(isbn, rating):
-        add_result, history = add_book_by_isbn(isbn, rating)
-        books_html, profile = refresh_recommendations()
-        return add_result, books_html, profile
-
 
     quick_add_btn.click(
         fn=quick_add_and_refresh,
