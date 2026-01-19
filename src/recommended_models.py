@@ -1,114 +1,107 @@
 import pandas as pd
-from surprise import SVD, KNNWithMeans, Dataset, Reader, accuracy
-from surprise.model_selection import train_test_split
+import numpy as np
+from pathlib import Path
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 
-class RecommenderEngine:
-    def __init__(self, train_path, test_path):
-        # Definim scala rating-urilor (0-10 pentru Book-Crossing)
-        self.reader = Reader(rating_scale=(0, 10))
-        
-        # Încărcăm seturile de date
-        train_df = pd.read_csv(train_path)
-        test_df = pd.read_csv(test_path)
-        
-        # Surprise are nevoie de ordinea: User, Item, Rating
-        self.train_data = Dataset.load_from_df(train_df[['User-ID', 'ISBN', 'Rating']], self.reader)
-        self.test_df = test_df
-        
-        # Generăm Trainset-ul oficial pentru Surprise
-        self.trainset = self.train_data.build_full_trainset()
-        
-    def train_svd(self):
-        print("Antrenare SVD...")
-        self.model_svd = SVD(n_factors=100, lr_all=0.005, reg_all=0.02)
-        self.model_svd.fit(self.trainset)
-        return self.model_svd
+# Importăm implementările noastre custom (pe care le vom scrie imediat)
+from svd import CustomSVD
+from knn import CustomKNN
 
-    def train_knn_user(self):
-        print("Antrenare User-based KNN...")
-        # similarity options: cosine, pearson, msd
-        sim_options = {'name': 'cosine', 'user_based': True}
-        self.model_knn_user = KNNWithMeans(sim_options=sim_options)
-        self.model_knn_user.fit(self.trainset)
-        return self.model_knn_user
-
-    def train_knn_item(self):
-        print("Antrenare Item-based KNN...")
-        sim_options = {'name': 'cosine', 'user_based': False}
-        self.model_knn_item = KNNWithMeans(sim_options=sim_options)
-        self.model_knn_item.fit(self.trainset)
-        return self.model_knn_item
-
-    def evaluate_model(self, model):
-        # Transformăm test_df în formatul de test Surprise
-        testset = list(self.test_df[['User-ID', 'ISBN', 'Rating']].itertuples(index=False, name=None))
-        predictions = model.test(testset)
+class RecommenderManager:
+    def __init__(self, train_path, test_path, books_path):
+        self.train_df = pd.read_csv(train_path)
+        self.test_df = pd.read_csv(test_path)
+        self.books_df = pd.read_csv(books_path)
         
-        rmse = accuracy.rmse(predictions, verbose=False)
-        mae = accuracy.mae(predictions, verbose=False)
+        # Pregătim matricea Pivot (User-Item Matrix)
+        # Aceasta este inima ambelor algoritmi
+        print("Pregătire matrice User-Item...")
+        self.user_item_matrix = self.train_df.pivot(
+            index='User-ID', 
+            columns='ISBN', 
+            values='Rating'
+        ).fillna(0)
+        
+    def run_svd(self, n_factors=50):
+        print(f"\n--- Rulare SVD (factors={n_factors}) ---")
+        model = CustomSVD(n_factors=n_factors)
+        model.fit(self.user_item_matrix)
+        
+        rmse, mae = self.evaluate(model)
+        print(f"SVD - RMSE: {rmse:.4f}, MAE: {mae:.4f}")
+        return model
+
+    def run_knn(self, k=20, method='user'):
+        print(f"\n--- Rulare KNN ({method}-based, k={k}) ---")
+        model = CustomKNN(k=k, method=method)
+        model.fit(self.user_item_matrix)
+        
+        rmse, mae = self.evaluate(model)
+        print(f"KNN {method} - RMSE: {rmse:.4f}, MAE: {mae:.4f}")
+        return model
+
+    def evaluate(self, model):
+        """Evaluează modelul pe setul de test folosind RMSE și MAE."""
+        y_true = []
+        y_pred = []
+        
+        for row in self.test_df.itertuples():
+            # Facem predicție pentru fiecare pereche (User, ISBN) din test
+            pred = model.predict(row._1, row.ISBN) # _1 este User-ID
+            
+            # Surprise/Standard scara este 0-10, clipuim valorile pentru siguranță
+            pred = max(0, min(10, pred))
+            
+            y_true.append(row.Rating)
+            y_pred.append(pred)
+            
+        rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+        mae = mean_absolute_error(y_true, y_pred)
         return rmse, mae
-    
-    def get_top_n_recommendations(self, model, user_id, n=5, books_metadata=None):
-        # Obținem toate ISBN-urile unice din dataset
-        all_books = self.trainset.all_items()
-        all_books_isbn = [self.trainset.to_raw_iid(i) for i in all_books]
-        
-        # Găsim cărțile pe care user-ul le-a citit deja în train
-        try:
-            user_inner_id = self.trainset.to_inner_uid(user_id)
-            user_read_books = [self.trainset.to_raw_iid(i) for (i, _) in self.trainset.ur[user_inner_id]]
-        except ValueError:
-            user_read_books = []
 
-        # Filtrăm cărțile necitite
-        books_to_predict = [b for b in all_books_isbn if b not in user_read_books]
+    def get_recommendations(self, model, user_id, n=5):
+        """Obține top N recomandări pentru un utilizator."""
+        print(f"\nGenerare recomandări pentru User {user_id}...")
         
-        # Generăm predicții
-        predictions = [model.predict(user_id, isbn) for isbn in books_to_predict]
+        # Identificăm ISBN-urile pe care user-ul nu le-a votat în train
+        user_ratings = self.train_df[self.train_df['User-ID'] == user_id]
+        read_isbns = set(user_ratings['ISBN'].unique())
+        all_isbns = self.user_item_matrix.columns
         
-        # Sortăm după rating-ul estimat
-        predictions.sort(key=lambda x: x.est, reverse=True)
+        to_predict = [isbn for isbn in all_isbns if isbn not in read_isbns]
+        
+        predictions = []
+        for isbn in to_predict:
+            score = model.predict(user_id, isbn)
+            predictions.append((isbn, score))
+            
+        # Sortăm după scor
+        predictions.sort(key=lambda x: x[1], reverse=True)
         top_n = predictions[:n]
         
-        # Adăugăm metadate (Titlu, Autor) dacă sunt disponibile
+        # Adăugăm metadate
         results = []
-        for p in top_n:
-            book_info = {'ISBN': p.iid, 'EstimatedRating': round(p.est, 2)}
-            if books_metadata is not None:
-                meta = books_metadata[books_metadata['ISBN'] == p.iid]
-                if not meta.empty:
-                    book_info['Title'] = meta.iloc[0]['Title']
-                    book_info['Author'] = meta.iloc[0]['Author']
-            results.append(book_info)
-            
+        for isbn, score in top_n:
+            book_info = self.books_df[self.books_df['ISBN'] == isbn].iloc[0]
+            results.append({
+                'Title': book_info['Title'],
+                'Author': book_info['Author'],
+                'EstimatedRating': round(score, 2)
+            })
         return results
+
+if __name__ == "__main__":
+    manager = RecommenderManager(
+        '../data/processed/train.csv',
+        '../data/processed/test.csv',
+        '../data/processed/books_final.csv'
+    )
     
-    if __name__ == "__main__":
-        engine = RecommenderEngine('../data/processed/train.csv', '../data/processed/test.csv')
-        books_meta = pd.read_csv('../data/processed/books_final.csv')
-
-        results = []
-        
-        # Rulăm modelele
-        models = {
-            "SVD": engine.train_svd(),
-            "User-KNN": engine.train_knn_user(),
-            "Item-KNN": engine.train_knn_item()
-        }
-        
-        for name, model in models.items():
-            rmse, mae = engine.evaluate_model(model)
-            results.append({"Model": name, "RMSE": rmse, "MAE": mae})
-        
-        # Afișăm tabelul de metrici
-        comparison_df = pd.DataFrame(results)
-        print("\n--- Comparație Metrici ---")
-        print(comparison_df)
-        
-        # Exemplu recomandare
-        example_user = 276747 # Schimbă cu un ID valid din dataset-ul tău
-        print(f"\nRecomandări SVD pentru User {example_user}:")
-        recs = engine.get_top_n_recommendations(models["SVD"], example_user, n=5, books_metadata=books_meta)
-        for r in recs:
-            print(f"- {r.get('Title', 'N/A')} ({r['Author']}): {r['EstimatedRating']}")
-
+    # Executăm SVD
+    svd_model = manager.run_svd()
+    
+    # Exemplu recomandare
+    sample_user = manager.test_df['User-ID'].iloc[0]
+    recs = manager.get_recommendations(svd_model, sample_user)
+    for r in recs:
+        print(f"- {r['Title']} ({r['Author']}): {r['EstimatedRating']}")
