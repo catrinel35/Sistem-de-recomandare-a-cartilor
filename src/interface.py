@@ -56,7 +56,6 @@ YEAR_RANGES = {
     '1990-2005': (1990, 2005)
 }
 
-
 PLACEHOLDER_IMAGE = "https://via.placeholder.com/150x220?text=No+Cover"
 
 try:
@@ -202,39 +201,40 @@ user_profile = {
 # =============================================================================
 
 def create_book_card_html(book: Dict) -> str:
-    title_display = book['title'][:45] + '...' if len(book['title']) > 45 else book['title']
-    author_display = book['author'][:25] + '...' if len(book['author']) > 25 else book['author']
-    genres_display = book['genres'][:35] + '...' if len(str(book['genres'])) > 35 else book['genres']
+    """Creeaza HTML pentru un card de carte"""
+    title_display = book['title'][:50] + '...' if len(book['title']) > 50 else book['title']
+    author_display = book['author'][:30] + '...' if len(book['author']) > 30 else book['author']
+    genres_display = book['genres'][:45] + '...' if len(str(book['genres'])) > 45 else book['genres']
 
     return f"""
     <div style="
-        border: 1px solid #ddd;
-        border-radius: 10px;
-        padding: 12px;
+        border: 2px solid #bbb;
+        border-radius: 12px;
+        padding: 18px;
         background: white;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.1);
-        width: 180px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        width: 240px;
         text-align: center;
     ">
         <img src="{book['image_url']}" 
-             style="width: 100px; height: 150px; object-fit: cover; border-radius: 6px; margin-bottom: 8px;"
+             style="width: 140px; height: 210px; object-fit: cover; border-radius: 8px; margin-bottom: 14px; box-shadow: 0 3px 10px rgba(0,0,0,0.2);"
              onerror="this.src='{PLACEHOLDER_IMAGE}'">
-        <div style="color: #555; font-weight: bold; font-size: 12px; height: 32px; overflow: hidden; margin-bottom: 4px;">
+        <div style="color: #1a1a1a; font-weight: bold; font-size: 16px; line-height: 1.3; min-height: 44px; overflow: hidden; margin-bottom: 10px;">
             {title_display}
         </div>
-        <div style="color: #555; font-size: 11px; margin-bottom: 2px;">
+        <div style="color: #333; font-size: 15px; font-weight: 500; margin-bottom: 8px;">
             {author_display}
         </div>
-        <div style="color: #777; font-size: 10px; margin-bottom: 2px;">
+        <div style="color: #444; font-size: 14px; font-weight: 500; margin-bottom: 8px;">
             {book['year']}
         </div>
-        <div style="color: #888; font-size: 9px; height: 24px; overflow: hidden;">
+        <div style="color: #555; font-size: 13px; min-height: 40px; overflow: hidden; margin-bottom: 10px; line-height: 1.4;">
             {genres_display}
         </div>
-        <div style="color: #999; font-size: 9px; margin-top: 4px;">
+        <div style="color: #2563eb; font-size: 15px; font-weight: bold; margin-top: 10px;">
             Score: {book.get('score', 'N/A')}
         </div>
-        <div style="color: #aaa; font-size: 9px; margin-top: 2px;">
+        <div style="color: #555; font-size: 13px; margin-top: 8px; font-family: monospace; background: #f5f5f5; padding: 4px 8px; border-radius: 4px;">
             {book['isbn']}
         </div>
     </div>
@@ -243,15 +243,15 @@ def create_book_card_html(book: Dict) -> str:
 
 def create_books_grid_html(books: List[Dict]) -> str:
     if not books:
-        return "<p style='text-align: center; color: #666; padding: 40px;'>Nu am gasit carti care sa corespunda preferintelor tale. Incearca alte filtre!</p>"
+        return "<p style='text-align: center; color: #666; padding: 40px; font-size: 16px;'>Nu am gasit carti care sa corespunda preferintelor tale. Incearca alte filtre!</p>"
 
     html = """
     <div style="
         display: flex;
         flex-wrap: wrap;
         justify-content: center;
-        gap: 12px;
-        padding: 15px;
+        gap: 20px;
+        padding: 20px;
     ">
     """
 
@@ -317,7 +317,6 @@ def get_current_profile_summary() -> str:
 # =============================================================================
 
 def add_book_by_isbn(isbn: str, rating: int):
-    """Adauga o carte la istoric dupa ISBN"""
     global user_profile
 
     if not isbn or not isbn.strip():
@@ -506,7 +505,7 @@ with gr.Blocks(title="Book Recommender", css=custom_css) as app:
                     gr.Markdown("### Profilul Tau")
                     profile_display = gr.Markdown(value=get_current_profile_summary())
 
-                    refresh_btn = gr.Button("Reincarca Recomandari", variant="secondary")
+                    # refresh_btn = gr.Button("Reincarca Recomandari", variant="secondary")
 
             gr.Markdown("---")
             gr.Markdown("### Adauga Rapid o Carte Citita")
@@ -587,11 +586,6 @@ with gr.Blocks(title="Book Recommender", css=custom_css) as app:
     get_recs_btn.click(
         fn=generate_recommendations,
         inputs=[genre1, genre2, genre3, subject1, subject2, subject3, year_range, language, age],
-        outputs=[books_display, profile_display]
-    )
-
-    refresh_btn.click(
-        fn=refresh_recommendations,
         outputs=[books_display, profile_display]
     )
 

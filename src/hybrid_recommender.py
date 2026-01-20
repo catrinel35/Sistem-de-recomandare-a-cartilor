@@ -471,6 +471,14 @@ class HybridRecommender:
             self.weights['recency'] * recency
         )
 
+        print(
+            f"[SCORE_BREAKDOWN] ISBN={isbn} | "
+            f"BERT={bert_sim:.3f}, CF={cf_score:.3f}, "
+            f"Genre={genre_match:.3f}, Subject={subject_match:.3f}, "
+            f"Popularity={pop_norm:.3f}, Recency={recency:.3f} "
+            f"=> FINAL={final_score:.4f}"
+        )
+
         return final_score
 
     # =========================================================================
@@ -492,7 +500,7 @@ class HybridRecommender:
 
         year_range = user_profile.get('preferred_year_range')
         language = user_profile.get('language')
-        exclude_isbns = set(user_profile.get('user_read_history', []))
+        exclude_isbns = set(str(isbn) for isbn, _ in user_profile.get('user_read_history', []))
 
         if year_range:
             print("Applying year filter:", year_range)
