@@ -5,25 +5,21 @@ import pandas as pd
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from sklearn.model_selection import train_test_split
 
+from database import engine
 from knn import CustomKNN
 from svd import CustomSVD
 
 
 class RecommenderManager:
-    def __init__(self, data_dir='../data/processed', test_size=0.2):
-        self.data_dir = Path(data_dir)
-
-        # Incarcam datele
-        print("Incarcare date...")
+    def __init__(self, test_size=0.2):  # eliminam data_dir
+        print("Incarcare date din Postgres...")
         self.books_df = self._load_books()
         self.users_df = self._load_users()
         self.ratings_df = self._load_ratings()
 
-        # Cream train/test split
         print(f"Creare train/test split (test_size={test_size})...")
         self.train_df, self.test_df = self._create_train_test_split(test_size)
 
-        # Pregatim matricea Pivot (User-Item Matrix)
         print("Pregatire matrice User-Item...")
         self.user_item_matrix = self.train_df.pivot(
             index='User-ID',
@@ -32,74 +28,54 @@ class RecommenderManager:
         ).fillna(0)
 
         print(f"Matrice User-Item: {self.user_item_matrix.shape}")
-        print(f"Train: {len(self.train_df)}, Test: {len(self.test_df)}")
 
     def _load_books(self):
-        """Incarca books_enriched.csv"""
-        books_path = self.data_dir / 'books_enriched.csv'
-        if not books_path.exists():
-            # Fallback la books_processed.csv
-            books_path = self.data_dir / 'books_processed.csv'
-
-        if not books_path.exists():
-            raise FileNotFoundError(f"Nu am gasit fisierul cu carti in {self.data_dir}")
-
-        books = pd.read_csv(books_path)
-        books['ISBN'] = books['ISBN'].astype(str)
-        print(f"Books loaded: {len(books)}")
-        return books
+        df = pd.read_sql("""
+            SELECT isbn AS "ISBN",
+                   title AS "Title",
+                   author AS "Author",
+                   genre AS "genres",
+                   year AS "Year"
+            FROM book
+        """, engine)
+        df['ISBN'] = df['ISBN'].astype(str)
+        print(f"Books loaded: {len(df)}")
+        return df
 
     def _load_users(self):
-        """Incarca users_enriched.csv sau users_processed.csv"""
-        users_path = self.data_dir / 'users_enriched.csv'
-        if not users_path.exists():
-            users_path = self.data_dir / 'users_processed.csv'
-
-        if users_path.exists():
-            users = pd.read_csv(users_path)
-            print(f"Users loaded: {len(users)}")
-            return users
-
-        print("Users file not found, continuing without user data")
-        return None
+        df = pd.read_sql("""
+            SELECT csv_user_id AS "User-ID",
+                   username,
+                   age AS "Age"
+            FROM users
+            WHERE csv_user_id IS NOT NULL
+        """, engine)
+        print(f"Users loaded: {len(df)}")
+        return df
 
     def _load_ratings(self):
-        """Incarca ratings_processed.csv"""
-        ratings_path = self.data_dir / 'ratings_processed.csv'
+        df = pd.read_sql("""
+            SELECT u.csv_user_id AS "User-ID",
+                   r.isbn AS "ISBN",
+                   r.rating AS "Rating"
+            FROM rating r
+            JOIN users u ON r.user_id = u.user_id
+            WHERE r.rating > 0
+        """, engine)
+        df['ISBN'] = df['ISBN'].astype(str)
 
-        if not ratings_path.exists():
-            raise FileNotFoundError(f"Nu am gasit {ratings_path}")
-
-        ratings = pd.read_csv(ratings_path)
-        ratings['ISBN'] = ratings['ISBN'].astype(str)
-
-        # Filtram doar rating-uri explicite (> 0) pentru CF
-        ratings = ratings[ratings['Rating'] > 0]
-        print(f"Ratings loaded (explicit only): {len(ratings)}")
-
-        # Filtram sa pastram doar ISBN-uri care exista in books_df
         valid_isbns = set(self.books_df['ISBN'].astype(str))
-        ratings = ratings[ratings['ISBN'].isin(valid_isbns)]
-        print(f"Ratings after filtering valid ISBNs: {len(ratings)}")
-
-        return ratings
+        df = df[df['ISBN'].isin(valid_isbns)]
+        print(f"Ratings loaded: {len(df)}")
+        return df
 
     def _create_train_test_split(self, test_size=0.2):
-        """Creeaza train/test split din ratings"""
         train_df, test_df = train_test_split(
             self.ratings_df,
             test_size=test_size,
             random_state=42
         )
-
-        # Salvam pentru reutilizare (optional)
-        train_path = self.data_dir / 'train.csv'
-        test_path = self.data_dir / 'test.csv'
-
-        train_df.to_csv(train_path, index=False)
-        test_df.to_csv(test_path, index=False)
-        print(f"Train/Test salvate in {self.data_dir}")
-
+        print(f"Train: {len(train_df)}, Test: {len(test_df)}")
         return train_df, test_df
 
     def run_svd(self, n_factors=50):
@@ -144,10 +120,8 @@ class RecommenderManager:
         return rmse, mae
 
     def get_recommendations(self, model, user_id, n=5):
-        """Obtine top N recomandari pentru un utilizator."""
         print(f"\nGenerare recomandari pentru User {user_id}...")
 
-        # Identificam ISBN-urile pe care user-ul nu le-a votat in train
         user_ratings = self.train_df[self.train_df['User-ID'] == user_id]
         read_isbns = set(user_ratings['ISBN'].astype(str).unique())
         all_isbns = self.user_item_matrix.columns.astype(str)
@@ -159,10 +133,8 @@ class RecommenderManager:
             score = model.predict(user_id, isbn)
             predictions.append((isbn, score))
 
-        # Sortam dupa scor
         predictions.sort(key=lambda x: x[1], reverse=True)
 
-        # Adaugam metadate - cu verificare
         results = []
         for isbn, score in predictions:
             if len(results) >= n:
@@ -173,12 +145,12 @@ class RecommenderManager:
             if not book_match.empty:
                 book_info = book_match.iloc[0]
                 results.append({
-                    'ISBN': isbn,
-                    'Title': book_info['Title'],
-                    'Author': book_info['Author'],
-                    'Year': book_info.get('Year', 'N/A'),
-                    'Genres': book_info.get('genres', 'N/A'),
-                    'EstimatedRating': round(score, 2)
+                    'ISBN': str(isbn),
+                    'Title': str(book_info['Title']) if pd.notna(book_info['Title']) else '',
+                    'Author': str(book_info['Author']) if pd.notna(book_info['Author']) else '',
+                    'Year': int(book_info['Year']) if pd.notna(book_info.get('Year')) else None,
+                    'Genres': str(book_info['genres']) if pd.notna(book_info.get('genres')) else '',
+                    'EstimatedRating': round(float(score), 2)
                 })
 
         return results
