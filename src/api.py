@@ -1,11 +1,11 @@
 from fastapi import FastAPI, HTTPException
 from recommended_models import RecommenderManager
-from knn import CustomKNN
-from svd import CustomSVD
+from sqlalchemy import text
+from database import engine
+import pandas as pd
 
 app = FastAPI()
 
-# Incarcam modelele la pornire
 print("Initializare modele ML...")
 manager = RecommenderManager(test_size=0.2)
 svd_model = manager.run_svd(n_factors=50)
@@ -14,12 +14,44 @@ knn_item_model = manager.run_knn(k=20, method='item')
 print("Modele incarcate!")
 
 
-@app.get("/recommend/{csv_user_id}")
-def recommend(csv_user_id: int, n: int = 5, method: str = "svd"):
-    """
-    Returneaza top N recomandari pentru un user.
-    method: svd | knn_user | knn_item
-    """
+def get_model_user_id(db_user_id: int) -> int:
+    """Converteste user_id din DB in ID-ul folosit in modelul ML"""
+    with engine.connect() as conn:
+        result = conn.execute(text("""
+            SELECT COALESCE(csv_user_id, user_id) AS model_id
+            FROM users 
+            WHERE user_id = :uid
+        """), {"uid": db_user_id}).fetchone()
+
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"User {db_user_id} nu exista in DB")
+    return result[0]
+
+
+def get_popular_books(n: int) -> list:
+    """Returneaza cele mai populare carti ca fallback pentru useri noi"""
+    popular_isbns = manager.ratings_df['ISBN'].value_counts().head(n).index.tolist()
+    results = []
+    for isbn in popular_isbns:
+        book_match = manager.books_df[manager.books_df['ISBN'] == isbn]
+        if not book_match.empty:
+            book_info = book_match.iloc[0]
+            results.append({
+                'ISBN': str(isbn),
+                'Title': str(book_info['Title']) if pd.notna(book_info['Title']) else '',
+                'Author': str(book_info['Author']) if pd.notna(book_info['Author']) else '',
+                'Year': int(book_info['Year']) if pd.notna(book_info.get('Year')) else None,
+                'Genres': str(book_info.get('genres', '')) if pd.notna(book_info.get('genres')) else '',
+                'EstimatedRating': 0.0,
+                'note': 'popular_fallback'
+            })
+    return results
+
+
+@app.get("/recommend/{db_user_id}")
+def recommend(db_user_id: int, n: int = 5, method: str = "svd"):
+    model_user_id = get_model_user_id(db_user_id)
+
     if method == "svd":
         model = svd_model
     elif method == "knn_user":
@@ -29,31 +61,53 @@ def recommend(csv_user_id: int, n: int = 5, method: str = "svd"):
     else:
         raise HTTPException(status_code=400, detail="method trebuie sa fie svd, knn_user sau knn_item")
 
-    recs = manager.get_recommendations(model, csv_user_id, n=n)
+    recs = manager.get_recommendations(model, model_user_id, n=n)
 
+    # Fallback pentru useri noi fara ratinguri in matrice
     if not recs:
-        raise HTTPException(status_code=404, detail=f"Nu s-au gasit recomandari pentru user {csv_user_id}")
+        recs = get_popular_books(n)
 
     return {
-        "user_id": csv_user_id,
+        "db_user_id": db_user_id,
+        "model_user_id": model_user_id,
         "method": method,
         "books": recs
     }
 
 
-@app.get("/recommend/{csv_user_id}/all")
-def recommend_all(csv_user_id: int, n: int = 5):
-    """
-    Returneaza recomandari din toate cele 3 modele simultan.
-    """
+@app.get("/recommend/{db_user_id}/all")
+def recommend_all(db_user_id: int, n: int = 5):
+    model_user_id = get_model_user_id(db_user_id)
+
+    svd_recs = manager.get_recommendations(svd_model, model_user_id, n=n) or get_popular_books(n)
+    knn_user_recs = manager.get_recommendations(knn_user_model, model_user_id, n=n) or get_popular_books(n)
+    knn_item_recs = manager.get_recommendations(knn_item_model, model_user_id, n=n) or get_popular_books(n)
+
     return {
-        "user_id": csv_user_id,
-        "svd": manager.get_recommendations(svd_model, csv_user_id, n=n),
-        "knn_user": manager.get_recommendations(knn_user_model, csv_user_id, n=n),
-        "knn_item": manager.get_recommendations(knn_item_model, csv_user_id, n=n),
+        "db_user_id": db_user_id,
+        "model_user_id": model_user_id,
+        "svd": svd_recs,
+        "knn_user": knn_user_recs,
+        "knn_item": knn_item_recs
     }
+
+
+@app.post("/admin/reload")
+def reload_models():
+    global manager, svd_model, knn_user_model, knn_item_model
+    print("Reloading models...")
+    manager = RecommenderManager(test_size=0.2)
+    svd_model = manager.run_svd(n_factors=50)
+    knn_user_model = manager.run_knn(k=20, method='user')
+    knn_item_model = manager.run_knn(k=20, method='item')
+    return {"status": "ok", "users": len(manager.users_df), "books": len(manager.books_df)}
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "books": len(manager.books_df), "ratings": len(manager.ratings_df)}
+    return {
+        "status": "ok",
+        "books": len(manager.books_df),
+        "users": len(manager.users_df),
+        "ratings": len(manager.ratings_df)
+    }
