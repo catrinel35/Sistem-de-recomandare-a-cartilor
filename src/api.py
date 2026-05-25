@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from recommended_models import RecommenderManager
 from sqlalchemy import text
-from database import engine
+from database import engine, get_avg_rating
 import pandas as pd
 
 app = FastAPI()

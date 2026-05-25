@@ -5,7 +5,7 @@ import pandas as pd
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from sklearn.model_selection import train_test_split
 
-from database import engine
+from database import engine, get_avg_rating
 from knn import CustomKNN
 from svd import CustomSVD
 
@@ -35,6 +35,8 @@ class RecommenderManager:
                    title AS "Title",
                    author AS "Author",
                    genre AS "genres",
+                   subject AS "subjects",
+                   image_url AS "image_url",
                    year AS "Year"
             FROM book
         """, engine)
@@ -144,13 +146,19 @@ class RecommenderManager:
 
             if not book_match.empty:
                 book_info = book_match.iloc[0]
+
+                # Media ratingului din DB (fara 0)
+                avg_rating = get_avg_rating(isbn)
+
                 results.append({
-                    'ISBN': str(isbn),
-                    'Title': str(book_info['Title']) if pd.notna(book_info['Title']) else '',
-                    'Author': str(book_info['Author']) if pd.notna(book_info['Author']) else '',
-                    'Year': int(book_info['Year']) if pd.notna(book_info.get('Year')) else None,
-                    'Genres': str(book_info['genres']) if pd.notna(book_info.get('genres')) else '',
-                    'EstimatedRating': round(float(score), 2)
+                    'isbn': str(isbn),
+                    'title': str(book_info['Title']) if pd.notna(book_info['Title']) else '',
+                    'author': str(book_info['Author']) if pd.notna(book_info['Author']) else '',
+                    'year': int(book_info['Year']) if pd.notna(book_info.get('Year')) else None,
+                    'genre': str(book_info.get('genres', '')) if pd.notna(book_info.get('genres')) else '',
+                    'theme': str(book_info.get('subjects', '')) if pd.notna(book_info.get('subjects')) else '',
+                    'rating': avg_rating,
+                    'imageUrl': str(book_info.get('image_url', '')) if pd.notna(book_info.get('image_url')) else '',
                 })
 
         return results
