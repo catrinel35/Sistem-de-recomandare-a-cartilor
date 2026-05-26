@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import pickle
 from sklearn.model_selection import train_test_split
+from database import engine, get_avg_rating
 
 from svd import CustomSVD
 from knn import CustomKNN
@@ -33,11 +34,8 @@ SCORING_WEIGHTS = {
 
 class HybridRecommender:
 
-    def __init__(self, data_dir: str = '../data/processed', test_size: float = 0.2):
-        self.data_dir = Path(data_dir)
+    def __init__(self, test_size: float = 0.2):
         self.test_size = test_size
-
-        # Date
         self.books_df = None
         self.users_df = None
         self.ratings_df = None
@@ -45,23 +43,16 @@ class HybridRecommender:
         self.test_df = None
         self.user_item_matrix = None
         self.popularity = {}
-
-        # Embeddings (.npy)
-        self.book_embeddings = None      # numpy array [n_books, embedding_dim]
-        self.user_embeddings = None      # numpy array [n_users, embedding_dim]
-        self.isbn_to_idx = {}            # ISBN -> index in book_embeddings
-        self.user_to_idx = {}            # User-ID -> index in user_embeddings
-        self.bert_model = None           # pentru encoding preferinte noi
-
-        # CF Models
+        self.book_embeddings = None
+        self.user_embeddings = None
+        self.isbn_to_idx = {}
+        self.user_to_idx = {}
+        self.bert_model = None
         self.svd_model = None
         self.knn_user_model = None
         self.knn_item_model = None
-
-        # Scoring weights
         self.weights = SCORING_WEIGHTS.copy()
 
-        # Load data
         self._load_data()
 
     # =========================================================================
@@ -81,54 +72,46 @@ class HybridRecommender:
         self._compute_popularity()
 
     def _load_books(self) -> pd.DataFrame:
-        books_path = self.data_dir / 'books_enriched.csv'
-        if not books_path.exists():
-            books_path = self.data_dir / 'books_processed.csv'
+        df = pd.read_sql("""
+            SELECT isbn AS "ISBN",
+                   title AS "Title",
+                   author AS "Author",
+                   genre AS "genres",
+                   subject AS "subjects",
+                   image_url AS "image_url",
+                   year AS "Year"
+            FROM book
+        """, engine)
+        df['ISBN'] = df['ISBN'].astype(str)
+        self.isbn_to_idx = {isbn: idx for idx, isbn in enumerate(df['ISBN'])}
+        print(f"Books loaded: {len(df)}")
+        return df
 
-        if not books_path.exists():
-            raise FileNotFoundError(f"Nu am gasit fisierul cu carti in {self.data_dir}")
-
-        books = pd.read_csv(books_path)
-        books['ISBN'] = books['ISBN'].astype(str)
-
-        self.isbn_to_idx = {isbn: idx for idx, isbn in enumerate(books['ISBN'])}
-
-        print(f"Books loaded: {len(books)}")
-        return books
-
-    def _load_users(self) -> Optional[pd.DataFrame]:
-        users_path = self.data_dir / 'users_enriched.csv'
-        if not users_path.exists():
-            users_path = self.data_dir / 'users_processed.csv'
-
-        if users_path.exists():
-            users = pd.read_csv(users_path)
-
-            self.user_to_idx = {uid: idx for idx, uid in enumerate(users['User-ID'])}
-
-            print(f"Users loaded: {len(users)}")
-            return users
-
-        print("Users file not found")
-        return None
+    def _load_users(self) -> pd.DataFrame:
+        df = pd.read_sql("""
+            SELECT COALESCE(csv_user_id, user_id) AS "User-ID",
+                   username,
+                   age AS "Age"
+            FROM users
+        """, engine)
+        self.user_to_idx = {uid: idx for idx, uid in enumerate(df['User-ID'])}
+        print(f"Users loaded: {len(df)}")
+        return df
 
     def _load_ratings(self) -> pd.DataFrame:
-        ratings_path = self.data_dir / 'ratings_processed.csv'
-
-        if not ratings_path.exists():
-            raise FileNotFoundError(f"Nu am gasit {ratings_path}")
-
-        ratings = pd.read_csv(ratings_path)
-        ratings['ISBN'] = ratings['ISBN'].astype(str)
-
-        ratings = ratings[ratings['Rating'] > 0]
-        print(f"Ratings loaded (explicit): {len(ratings)}")
-
-        valid_isbns = set(self.books_df['ISBN'])
-        ratings = ratings[ratings['ISBN'].isin(valid_isbns)]
-        print(f"Ratings after ISBN filter: {len(ratings)}")
-
-        return ratings
+        df = pd.read_sql("""
+            SELECT COALESCE(u.csv_user_id, u.user_id) AS "User-ID",
+                   r.isbn AS "ISBN",
+                   r.rating AS "Rating"
+            FROM rating r
+            JOIN users u ON r.user_id = u.user_id
+            WHERE r.rating > 0
+        """, engine)
+        df['ISBN'] = df['ISBN'].astype(str)
+        valid_isbns = set(self.books_df['ISBN'].astype(str))
+        df = df[df['ISBN'].isin(valid_isbns)]
+        print(f"Ratings loaded: {len(df)}")
+        return df
 
     def _create_train_test_split(self):
         self.train_df, self.test_df = train_test_split(
@@ -561,12 +544,14 @@ class HybridRecommender:
 
             results.append({
                 'isbn': str(row['ISBN']),
-                'title': row['Title'],
-                'author': row['Author'],
-                'year': int(row['Year']) if pd.notna(row.get('Year')) else 'N/A',
-                'genres': row.get('genres', 'N/A') if pd.notna(row.get('genres')) else 'N/A',
-                'image_url': image_url,
-                'score': round(row['final_score'], 3)
+                'title': str(row['Title']) if pd.notna(row['Title']) else '',
+                'author': str(row['Author']) if pd.notna(row['Author']) else '',
+                'year': int(row['Year']) if pd.notna(row.get('Year')) else None,
+                'genre': str(row.get('genres', '')) if pd.notna(row.get('genres')) else '',
+                'theme': str(row.get('subjects', '')) if pd.notna(row.get('subjects')) else '',
+                'rating': get_avg_rating(str(row['ISBN'])),
+                'score': round(row['final_score'], 3),
+                'imageUrl': image_url,
             })
 
         return results
