@@ -147,7 +147,7 @@ class RecommenderManager:
             if not book_match.empty:
                 book_info = book_match.iloc[0]
 
-                # Media ratingului din DB (fara 0)
+                # Media ratingului din DB fara 0
                 avg_rating = get_avg_rating(isbn)
 
                 results.append({
@@ -158,6 +158,7 @@ class RecommenderManager:
                     'genre': str(book_info.get('genres', '')) if pd.notna(book_info.get('genres')) else '',
                     'theme': str(book_info.get('subjects', '')) if pd.notna(book_info.get('subjects')) else '',
                     'rating': avg_rating,
+                    'score': round(score, 2),
                     'imageUrl': str(book_info.get('image_url', '')) if pd.notna(book_info.get('image_url')) else '',
                 })
 
